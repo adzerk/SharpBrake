@@ -1,11 +1,14 @@
 ﻿using System;
 using System.Collections.Generic;
-using log4net.Appender;
-using log4net.Core;
+using NLog;
+using NLog.Targets;
+
 
 namespace SharpHop
 {
-    public class HoptoadAppender : BufferingAppenderSkeleton
+	
+	[Target("HoptoadAppender")] 
+    public sealed class HoptoadAppender: TargetWithLayout
     {
         private HoptoadClient _client;
         private string _apiKey;
@@ -13,6 +16,7 @@ namespace SharpHop
         private string _appName;
         private string _appVersion;
         private string _appUrl;
+		private string _aggregatorUrl;
 
         public string ApiKey
         {
@@ -43,69 +47,69 @@ namespace SharpHop
             get { return _appUrl; }
             set { _appUrl = value; }
         }
+		
+		public string AggregatorUrl
+		{
+			get { return _aggregatorUrl; }
+			set { _aggregatorUrl = value; }
+		}
 
+        public string Host { get; set; }
+		
         public HoptoadAppender()
         {
+			this.Host = System.Net.Dns.GetHostName();
+        }
+		
+		protected override void Write(LogEventInfo logEvent) 
+        { 
+			
+			if (logEvent.Exception == null)
+			{
+				return;
+			}
+
+			_client = new HoptoadClient(ApiKey, AggregatorUrl);
+			
+            string logMessage = logEvent.Exception.ToString();
+			
+			string stackTrace = logEvent.Exception.StackTrace.ToString();
+			string[] lines = stackTrace.Split('\n');
+
+            IList<HoptoadBackTrack> backTracks = new List<HoptoadBackTrack>();
+			foreach (var line in lines)
+			{
+				char[] delims = { ' ', ',', ':', '\t', '<','>' };
+				Console.WriteLine("line: " + line);
+				string[] words = line.Split(delims);
+				string fileName = words[10];
+				string lineNumber = words[12];
+				string methodName = words[3];
+				Console.WriteLine("file #: " + fileName);
+				Console.WriteLine("line #: " + lineNumber);
+				Console.WriteLine("method: " + methodName);
+				//line
+				//file
+				//method
+				backTracks.Add(new HoptoadBackTrack(lineNumber, fileName, methodName));
+			}
+
+
+            HoptoadMessage message = new HoptoadMessage(
+                _appName,
+                _appVersion,
+                _appUrl,
+                logEvent.Exception.GetType().ToString(),
+                logMessage,
+                backTracks,
+                "",
+                _environmentName);
+			
+			Console.WriteLine("Sending exception data to hoptoad url");
+            _client.Send(message);
+           
+
         }
 
-        protected override bool IsAsSevereAsThreshold(Level level)
-        {
-            return ((level == Level.Fatal) ||
-                    (level == Level.Error) ||
-                    (level == Level.Alert) ||
-                    (level == Level.Critical) ||
-                    (level == Level.Emergency) ||
-                    (level == Level.Severe));
-        }
-
-        protected override void Append(LoggingEvent loggingEvent)
-        {
-            if (loggingEvent == null)
-            {
-                return;
-            }
-
-            try
-            {
-                _client = new HoptoadClient(ApiKey);
-
-                IList<HoptoadBackTrack> backTracks = new List<HoptoadBackTrack>
-                                                         {
-                                                             new HoptoadBackTrack(
-                                                                 loggingEvent.LocationInformation.LineNumber,
-                                                                 loggingEvent.LocationInformation.FileName,
-                                                                 loggingEvent.LocationInformation.MethodName)
-                                                         };
-
-                HoptoadMessage message = new HoptoadMessage(
-                    _appName,
-                    _appVersion,
-                    _appUrl,
-                    loggingEvent.LocationInformation.ClassName,
-                    RenderLoggingEvent(loggingEvent),
-                    backTracks,
-                    loggingEvent.Domain,
-                    _environmentName);
-
-                _client.Send(message);
-            }
-            catch (Exception exception)
-            {
-                ErrorHandler.Error("Error during sending hoptoad notification", exception);
-            }
-        }
-
-        protected override void SendBuffer(LoggingEvent[] events)
-        {
-            if (events == null)
-            {
-                return;
-            }
-
-            foreach (LoggingEvent loggingEvent in events)
-            {
-                Append(loggingEvent);
-            }
-        }
     }
 }
